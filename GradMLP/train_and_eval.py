@@ -125,6 +125,59 @@ def train_gradbert(model, dataloader, feats, labels, mask, criterion, optimizer,
 
     return total_loss / len(dataloader)
 
+def train_gradbert_alt(model, dataloader, feats, labels, mask, criterion, optimizer, alpha, lambda_f):
+    """
+    Train for GraphSAGE. Process the graph in mini-batches using `dataloader` instead the entire graph `g`.
+    lamb: weight parameter lambda
+    """
+    device = feats.device
+    model.train()
+    total_loss = 0
+    for step, (input_nodes, output_nodes, blocks) in enumerate(dataloader):
+        blocks = [blk.int().to(device) for blk in blocks]
+        batch_feats = feats[input_nodes]
+        batch_labels = labels[output_nodes]
+        batch_mask = mask[output_nodes]
+
+
+        #Compute loss and prediction
+        _, logits_gnn = model(blocks, batch_feats)
+        
+       
+        out_gnn = logits_gnn.log_softmax(dim=1)
+        
+        loss_gnn = compute_loss(out_gnn, batch_labels, batch_mask)
+
+        loss = loss_gnn 
+        total_loss += loss.item()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        logits_mlp, _ = model(None, feats[output_nodes])
+        _, logits_gnn = model(blocks, batch_feats)
+        
+        out_mlp = logits_mlp.log_softmax(dim=1)
+        out_gnn = logits_gnn.log_softmax(dim=1)
+        
+        loss_kd = criterion(out_mlp, out_gnn.detach())
+        
+        loss_gnn = compute_loss(out_gnn, batch_labels, batch_mask)
+        loss_mlp = compute_loss(out_mlp, batch_labels, batch_mask)
+        
+        
+        
+        loss_kd = criterion(out_mlp, out_gnn.detach())
+        loss = lambda_f*loss_kd + loss_mlp
+        total_loss += loss.item()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return total_loss / len(dataloader)
+
 
 def train_mini_batch(model, feats, labels, batch_size, criterion, optimizer, lamb=1):
     """
