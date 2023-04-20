@@ -1,40 +1,53 @@
 import argparse
- 
+
+
 import torch
 from tqdm import tqdm
 import torch.nn.functional as F
- 
+
+
 from torch_geometric.data import GraphSAINTRandomWalkSampler, NeighborSampler
 from torch_geometric.nn import SAGEConv
 from torch_geometric.utils import subgraph
- 
+
+
 from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
- 
+
+
 from logger import Logger
 import numpy as np
- 
- 
+
+
+
+
+
 class SAGE(torch.nn.Module):
    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
                 dropout):
        super(SAGE, self).__init__()
- 
+
+
        self.convs = torch.nn.ModuleList()
        self.convs.append(SAGEConv(in_channels, hidden_channels))
        for _ in range(num_layers - 2):
            self.convs.append(SAGEConv(hidden_channels, hidden_channels))
        self.convs.append(SAGEConv(hidden_channels, out_channels))
- 
+
+
        self.dropout = dropout
- 
+
+
        self.lin = torch.nn.Linear(in_channels, in_channels)
- 
+
+
    def reset_parameters(self):
        for conv in self.convs:
            conv.reset_parameters()
- 
+
+
    def forward(self, x, edge_index, edge_weight=None):
- 
+
+
        #x = x + F.tanh(self.lin(F.dropout(x2, p=self.dropout, training=self.training)))
       
        for conv in self.convs[:-1]:
@@ -43,12 +56,15 @@ class SAGE(torch.nn.Module):
            x = F.dropout(x, p=self.dropout, training=self.training)
        x = self.convs[-1](x, edge_index, edge_weight)
        return torch.log_softmax(x, dim=-1)
- 
+
+
    def inference(self, x_all, subgraph_loader, device):
- 
+
+
        pbar = tqdm(total=x_all.size(0) * len(self.convs))
        pbar.set_description('Evaluating')
- 
+
+
        for i, conv in enumerate(self.convs):
            xs = []
            for batch_size, n_id, adj in subgraph_loader:
@@ -62,19 +78,26 @@ class SAGE(torch.nn.Module):
                if i != len(self.convs) - 1:
                    x = F.relu(x)
                xs.append(x.cpu())
- 
+
+
                pbar.update(batch_size)
- 
+
+
            x_all = torch.cat(xs, dim=0)
- 
+
+
        pbar.close()
- 
+
+
        return x_all
- 
- 
+
+
+
+
 def train(model, loader, optimizer, device, alpha):
    model.train()
- 
+
+
    total_loss = 0
    for data in loader:
        data = data.to(device)
@@ -87,23 +110,29 @@ def train(model, loader, optimizer, device, alpha):
        loss.backward()
        optimizer.step()
        total_loss += loss.item()
- 
+
+
    return total_loss / len(loader)
- 
- 
+
+
+
+
 @torch.no_grad()
 def test(model, data, evaluator, subgraph_loader, device, alpha):
    model.eval()
- 
+
+
   
    out = model.inference(data.x1, subgraph_loader, device)
    out2 = model.inference(data.x2, subgraph_loader, device)
- 
+
+
    y_true = data.y
    y_pred = alpha * torch.log_softmax(out, dim=-1) + (1-alpha) * torch.log_softmax(out2, dim=-1)
    #y_pred =  out.argmax(dim=-1, keepdim=True) #y_pred.argmax(dim=-1, keepdim=True)
    y_pred =  y_pred.argmax(dim=-1, keepdim=True)
- 
+
+
    train_acc = evaluator.eval({
        'y_true': y_true[data.train_mask],
        'y_pred': y_pred[data.train_mask]
@@ -116,10 +145,13 @@ def test(model, data, evaluator, subgraph_loader, device, alpha):
        'y_true': y_true[data.test_mask],
        'y_pred': y_pred[data.test_mask]
    })['acc']
- 
+
+
    return train_acc, valid_acc, test_acc
- 
- 
+
+
+
+
 def to_inductive(data):
    mask = data.train_mask
    data.x = data.x[mask]
@@ -130,8 +162,10 @@ def to_inductive(data):
                                  relabel_nodes=True, num_nodes=data.num_nodes)
    data.num_nodes = mask.sum().item()
    return data
- 
- 
+
+
+
+
 def main():
    parser = argparse.ArgumentParser(description='OGBN-Products (GraphSAINT)')
    parser.add_argument('--device', type=int, default=0)
@@ -149,27 +183,32 @@ def main():
    parser.add_argument('--runs', type=int, default=10)
    parser.add_argument('--data_root_dir', type=str, default='../../dataset')
    parser.add_argument('--node_emb_path', type=str, default=None)
-   parser.add_argument('--node_emb_path2', type=str, default=None)
-   parser.add_argument('--alpha', type=float, default=0.25)
+   parser.add_argument('--node_emb_path_giant', type=str, default=None)
+   parser.add_argument('--alpha', type=float, default=0.5)
    args = parser.parse_args()
    print(args)
- 
+
+
    device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
    device = torch.device(device)
- 
+
+
    alpha = args.alpha
    dataset = PygNodePropPredDataset(name='ogbn-products', root=args.data_root_dir)
    split_idx = dataset.get_idx_split()
    data = dataset[0]
- 
-   
+
+
+   # Load Pretrained node features from PECOS
    if args.node_emb_path:
-        x1 = torch.from_numpy(np.load(args.node_emb_path).astype(np.float32))
-        data.x1 = x1
-   if args.node_emb_path2:
-        x2 = torch.from_numpy(np.load(args.node_emb_path2).astype(np.float32))
-        data.x2 = x2
-   print("Loaded pre-trained node embeddings  from {} {}".format(args.node_emb_path, args.node_emb_path2))
+       x1 = torch.from_numpy(np.load(args.node_emb_path).astype(np.float32))
+       #x1 = torch.nn.functional.normalize(x1, p=2.0, dim = 1)
+       x2 = torch.from_numpy(np.load(args.node_emb_path_giant).astype(np.float32))
+       #x2 = torch.nn.functional.normalize(x2, p=2.0, dim = 1)
+       data.x1 = x1 # torch.cat((x1,x2), dim=-1) #torch.from_numpy(smat_util.load_matrix(args.node_emb_path).astype(np.float32))
+       data.x2 = x2
+       print("Loaded pre-trained node embeddings of shape={} from {}".format(data.x1.shape, args.node_emb_path))
+       print("Loaded pre-trained node embeddings of shape={} from {}".format(data.x2.shape, args.node_emb_path_giant))
 
 
    # Convert split indices to boolean masks and add them to `data`.
@@ -177,31 +216,37 @@ def main():
        mask = torch.zeros(data.num_nodes, dtype=torch.bool)
        mask[idx] = True
        data[f'{key}_mask'] = mask
- 
+
+
    # We omit normalization factors here since those are only defined for the
    # inductive learning setup.
    sampler_data = data
    if args.inductive:
        sampler_data = to_inductive(data)
- 
+
+
    loader = GraphSAINTRandomWalkSampler(sampler_data,
                                         batch_size=args.batch_size,
                                         walk_length=args.walk_length,
                                         num_steps=args.num_steps,
                                         sample_coverage=0,
                                         save_dir=dataset.processed_dir)
- 
+
+
    model = SAGE(data.x1.size(-1), args.hidden_channels, dataset.num_classes,
                 args.num_layers, args.dropout).to(device)
- 
+
+
    subgraph_loader = NeighborSampler(data.edge_index, sizes=[-1],
                                      batch_size=4096, shuffle=False,
                                      num_workers=12)
- 
+
+
    evaluator = Evaluator(name='ogbn-products')
    logger = Logger(args.runs, args)
    logger2 =  Logger(args.runs, args)
- 
+
+
    for run in range(args.runs):
        model.reset_parameters()
        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -211,7 +256,8 @@ def main():
                print(f'Run: {run + 1:02d}, '
                      f'Epoch: {epoch:02d}, '
                      f'Loss: {loss:.4f}')
- 
+
+
            if epoch > 9 and epoch % args.eval_steps == 0:
                result = test(model, data, evaluator, subgraph_loader, device, alpha)
                logger.add_result(run, result)
@@ -222,14 +268,19 @@ def main():
                      f'Valid: {100 * valid_acc:.2f}% '
                      f'Test: {100 * test_acc:.2f}%')
               
- 
+
+
        logger.add_result(run, result)
        logger.print_statistics(run)
- 
+
+
    logger.print_statistics()
- 
- 
+
+
+
+
 if __name__ == "__main__":
    main()
- 
+
+
 

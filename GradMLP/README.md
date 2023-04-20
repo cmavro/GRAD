@@ -60,7 +60,7 @@ We obtain the following results (mean over 10 runs) for evaluating on inductive 
 | A-photo    | 89.96          | 88.83        | **90.09**      | 
  
 
-For Grad-Alt, the function `train_gradbert_alt` is in `train_and_eval` at line 128. Simply rename it from `train_gradbert_alt` to `train_gradbert` and run `bash experiments/cora_gradmlp.sh`, etc., to reproduce the results.
+For Grad-Alt, the function `train_gradbert_alt` is in `train_and_eval` at line 128. Simply rename it from `train_gradbert_alt` to `train_gradbert` and run `bash experiments/cora_gradmlp.sh`, etc., to reproduce the results (to be improved).
 
 ## Citation
 
