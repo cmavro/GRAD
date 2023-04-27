@@ -18,10 +18,9 @@ First let's setup a conda enviroment
 conda create -n "grad" python=3.8
 conda activate grad
 ```
-Next, we install pytorch and libpecos:
+Next, we install pytorch:
 ```bash
 conda install pytorch==1.9.0 cudatoolkit=10.2 -c pytorch
-pip install libpecos==0.2.2
 # check the pytorch version and cuda availability
 python -c "import torch; print('torch={}, cuda={}'.format(torch.__version__, torch.cuda.is_available()))"
 ```
